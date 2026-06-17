@@ -28,6 +28,25 @@ jobs:
           pip install bgsage
           python validate_sage.py
 
+  gnubg-probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install bgarena (core, no bgsage)
+        run: pip install -e .
+
+      - name: Install gnubg
+        run: sudo apt-get install -y gnubg
+
+      - name: Run probe
+        run: python scripts/gnubg_probe.py
+
   gnubg:
     # Separate job: gnubg is an external program with its own install + a
     # headless launch that can be finicky in CI, so it must not break the
