@@ -102,19 +102,38 @@ class WildbgEngine(Engine):
 
 
 class SageEngine(Engine):
-    """STUB. Sage ships as the pip-installable `bgsage` library:
+    """Open Sage (`pip install bgsage`), a neural-network engine.
 
-        pip install bgsage
+    Asks Sage's checker-play analytics for the ranked moves and plays the
+    top-equity one. The arena board converts directly to Sage's 26-int format,
+    and Sage returns the resulting board, so the chosen move maps back to one of
+    our legal plays by board equality.
 
-    It exposes best-move and cube-decision calls with full analytics. Wire this
-    by importing bgsage, converting `board` to its position format, asking for
-    the best play, and matching the result back to one of `plays`.
+    Evaluation level follows Sage's XG-style numbering: '1ply' is the raw net
+    (fast); each extra ply is ~20x slower. We model a cubeless 1-pointer with
+    away1=away2=1, where the cube is dead and the engine optimizes win
+    probability — exactly the v1 comparison.
     """
 
-    name = "Sage"
+    def __init__(self, level: str = "1ply", name: str | None = None):
+        from bgsage import create_analyzer  # lazy: core arena needs no bgsage
+        self.level = level
+        self.name = name or f"Sage-{level}"
+        self._az = create_analyzer(level=level)
 
     def choose(self, board, dice, plays, context):
-        raise NotImplementedError("Install bgsage and map its best-move call here.")
+        d1, d2 = dice
+        res = self._az.checker_play(board.to_sage(), d1, d2, away1=1, away2=1)
+        if not res.moves:
+            raise ValueError("Sage returned no moves for a position with legal plays")
+        target = res.moves[0].board                       # best move's resulting board
+        for pl in plays:
+            if pl.end_board.to_sage() == target:
+                return pl
+        raise ValueError(
+            "Sage's chosen move did not match any legal play — check board "
+            f"conversion. Sage board: {target}"
+        )
 
 
 class GnubgEngine(Engine):

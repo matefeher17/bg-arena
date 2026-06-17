@@ -101,6 +101,21 @@ class Board:
         return (tuple(self.points), self.bar, self.opp_bar, self.off, self.opp_off)
 
     # ---- serialization for engine adapters ------------------------------
+    def to_sage(self) -> list[int]:
+        """26-element board in bgsage's representation.
+
+        Indices 1..24 are the points (same sign convention as ours: positive =
+        player on roll). Index 25 = on-roll bar, index 0 = opponent bar. Both
+        bars are stored as positive counts (the index, not the sign, marks the
+        owner). Borne-off checkers are implicit (15 minus those on board).
+        """
+        arr = [0] * 26
+        for p in range(1, NUM_POINTS + 1):
+            arr[p] = self.points[p]
+        arr[25] = self.bar
+        arr[0] = self.opp_bar
+        return arr
+
     def to_wildbg_params(self) -> dict:
         """Query params for Wildbg's /move endpoint (signed point counts).
 
