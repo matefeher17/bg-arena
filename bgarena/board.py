@@ -180,7 +180,10 @@ class Board:
             d1, d2,                  # on-roll player's dice
             0, 0,                    # opponent's dice (not their turn)
             1,                       # cube value
-            0, 0,                    # may double (player, opponent) — SPEC-2
+            1, 1,                    # may double (player, opponent): centered cube.
+                                     # MUST be non-zero: gnubg's ParseFIBSBoard treats
+                                     # was-doubled==0 && both may-double==0 as "cube was
+                                     # turned" and replies take/drop instead of a move.
             0,                       # was doubled
             1,                       # colour of player on roll (must match turn)
             -1,                      # direction of play (high -> low)
