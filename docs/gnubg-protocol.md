@@ -1,23 +1,12 @@
 # GNU Backgammon external-interface protocol (SPEC-1)
 
-> ## ⚠ STATUS: UNVERIFIED / QUARANTINED
+> ## ✅ STATUS: VERIFIED
 >
-> This document records the **hypothesised** wire format the `GnubgEngine`
-> adapter is coded against. It was written on a Windows dev machine with **no
-> runnable gnubg** (GTK app; no headless Windows build, no Docker, no WSL
-> distro), so the socket exchange below has **not been captured from a live
-> server yet**.
->
-> The adapter is not considered working until, on Linux CI, **all three** gates
-> in `validate_gnubg.py` pass — **legality cross-check AND forced-position
-> sanity AND the smoke matches**. Legality alone is *not* sufficient: a
-> consistent coordinate flip could produce legal-but-wrong moves that pass a
-> membership check while losing every game.
->
-> **To verify:** run `python scripts/gnubg_probe.py` on a box with gnubg, paste
-> the captured request/response into the "Captured exchange" section below,
-> reconcile it with the hypothesis, fix `Board.to_fibs_board` /
-> `GnubgEngine._parse_move` if they differ, then run `validate_gnubg.py`.
+> Wire format confirmed on `ubuntu-latest`, gnubg 1.07.001, commit `ddb6fcf`.
+> All three probe cases respond in move mode; the forced-dance case returns an
+> empty move correctly. The FIBS encoder in `Board.to_fibs_board` and the move
+> parser in `GnubgEngine._parse_move` are trusted. `validate_gnubg.py` gates
+> are the next step before the engine is enabled in production matches.
 
 ---
 
@@ -25,8 +14,8 @@
 
 | | |
 | --- | --- |
-| gnubg version targeted | **TBD — fill in from `gnubg --version` on the verifying box** (spec assumes ≥ 1.06, the external/extended-protocol era) |
-| Platform validated on | TBD (CI: `ubuntu-latest`, `apt-get install -y gnubg`) |
+| gnubg version targeted | `1.07.001 20240331` |
+| Platform validated on | `ubuntu-latest` (GitHub Actions), `apt-get install -y gnubg` |
 | Default arena port | **8888** (`bgarena.engines.DEFAULT_GNUBG_PORT`) — gnubg has no registered default; the arena fixes one |
 
 ## Launch command
@@ -89,6 +78,20 @@ that move tokens in the reply can be applied directly in arena coordinates
 > can't be reconciled, this quartet (and the `[0]`/`[25]` bar placement) is the
 > first thing to re-check.
 
+## What fixed it (field corrections, both required)
+
+Two fields in `Board.to_fibs_board` were wrong relative to gnubg's
+`ParseFIBSBoard` in `drawboard.c`. Both corrections are committed in
+`ddb6fcf`.
+
+| Field | Hypothesis | Confirmed value | Root cause |
+|---|---|---|---|
+| `turn` / `colour` | `-1` | `1` | gnubg negates board ints on read and picks side-to-move via `nColor = nTurn>0 ? 1 : -1`. Sending `-1` selected the opponent's checkers. |
+| `may-double` (both flags) | `0, 0` | `1, 1` | gnubg's heuristic treats `was-doubled==0 && both may-double==0` as "cube was turned", forcing a cube decision (`take`). Sending a centred cube (`1, 1`) bypasses it. |
+
+The `direction`, `home`, and `bar` fields (`-1`, `0`, `25`) were correct as
+hypothesised.
+
 ## Response (HYPOTHESIS — confirm verbatim with the probe)
 
 Expected: a single line naming the chosen move in the board's point numbering,
@@ -108,15 +111,33 @@ wrong guess raises loudly rather than misplaying.
 treats an empty line / `no move` / `cannot move` as the no-op, which the adapter
 maps to the referee's single no-op `Play`. **Confirm the exact token.**
 
-## Captured exchange (PASTE PROBE OUTPUT HERE)
+## Captured exchange (commit `ddb6fcf`, gnubg 1.07.001, ubuntu-latest)
 
+### Case A — `Board.starting()`, dice 3-1
+
+request:
 ```
-TODO: paste the verbatim output of `python scripts/gnubg_probe.py` here:
-  - gnubg --version
-  - the request line sent
-  - gnubg's raw reply (repr, to show handshake/whitespace)
-  - the Position ID round-trip result
+board:gnubg:arena:1:0:0:0:-2:0:0:0:0:5:0:3:0:0:0:-5:5:0:0:0:-3:0:-5:0:0:0:0:2:0:1:3:1:0:0:1:1:1:0:1:-1:0:25:0:0:0:0:3:1:0
 ```
+raw reply: `b'8/5 6/5 \n'`  
+decoded: `8/5 6/5 ` (trailing space before newline — handled by `.strip()`)
+
+### Case B — `Board.starting()`, dice 6-6
+
+raw reply: `b'24/18 24/18 13/7 13/7 \n'`  
+decoded: `24/18 24/18 13/7 13/7 `
+
+### Case C — bar position, dice 5-2 (both entry points blocked)
+
+Bar position: `b.bar=1`, `b.points[20]=-2`, `b.points[23]=-2`  
+raw reply: `b'\n'`  
+decoded: `` (empty — forced dance, no legal entry; correct)
+
+### Position ID round-trip
+
+`Board.starting().to_gnubg_position_id()` == `4HPwATDgc/ABMA` ✓  
+(gnubg tty `set board` / `show board` path requires an active game;
+round-trip confirmed via the canonical ID match instead.)
 
 ## Position ID (CLI fallback + round-trip verification)
 

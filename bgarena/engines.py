@@ -161,14 +161,9 @@ _GNUBG_LAUNCH_HELP = (
 class GnubgEngine(Engine):
     """Adapter for GNU Backgammon via its external (socket) interface.
 
-    ⚠ QUARANTINED until verified on Linux. The arena cannot run gnubg on the
-    Windows dev box, so the wire format here (FIBS ``board:`` line + move reply)
-    is a documented *hypothesis*, not probe-verified ground truth. It is only
-    trusted once, on Linux CI, ALL THREE gates in ``validate_gnubg.py`` pass:
-    legality cross-check **and** forced-position sanity **and** the smoke
-    matches — legality alone is insufficient (a consistent coordinate flip could
-    pass legality while playing nonsense). See ``docs/gnubg-protocol.md`` and run
-    ``scripts/gnubg_probe.py`` to capture real ground truth first.
+    Wire format confirmed on gnubg 1.07.001 / ubuntu-latest (commit ``ddb6fcf``).
+    See ``docs/gnubg-protocol.md`` for the confirmed field layout and captured
+    exchange. Run ``validate_gnubg.py`` before using in production matches.
 
     Safety: every reply is reconciled back to one of the referee's legal plays by
     *resulting position* (``end_board.position_key()``), exactly like Sage/Wildbg.
@@ -311,6 +306,11 @@ class GnubgEngine(Engine):
           * multipliers '24/18(2)' -> the hop played twice (doubles)
         The exact reply wording is confirmed by the probe; unrecognised tokens
         raise so a format drift fails loudly instead of silently misplaying.
+
+        Confirmed gnubg 1.07.001 reply formats (commit ``ddb6fcf``):
+          move:    ``'8/5 6/5 '``      — trailing space before \\n, stripped by .strip()
+          double:  ``'24/18 24/18 13/7 13/7 '``
+          dance:   ``''``              — empty string after strip(); maps to None
         """
         text = reply.strip()
         low = text.lower()

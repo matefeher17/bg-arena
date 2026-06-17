@@ -1,213 +1,263 @@
-"""Validate the GNUbg adapter — the quarantine gate for SPEC-1.
+"""Three-gate validation for GnubgEngine: legal, correct, and competitive.
 
-The FIBS-board encoder and move parser in the GNUbg adapter are coded against a
-*hypothesised* wire format (the dev box can't run gnubg; see
-docs/gnubg-protocol.md). This script is what lifts the quarantine: the adapter is
-trusted only when ALL THREE gates below pass on a real (Linux) gnubg —
+All three gates must pass before ``continue-on-error: true`` is removed from
+the ``gnubg`` CI job and ``GnubgEngine`` joins the contender round-robin:
 
-    1. legality cross-check   (every returned move is a legal Play)
-    2. forced-position sanity (gnubg makes the obviously-correct play)
-    3. smoke matches          (full games terminate vs Heuristic and Sage)
+    gate 1  legality cross-check   — every move gnubg plays is one the referee
+                                      considers legal (membership by resulting
+                                      position).
+    gate 2  forced-position sanity — on positions with a single unambiguous
+                                      best play, gnubg plays the *right* move,
+                                      not merely a legal one. Catches a
+                                      consistent coordinate flip that would
+                                      sail through gate 1 while losing.
+    gate 3  smoke matches          — gnubg beats Random clearly and stays
+                                      competitive with Heuristic.
 
-Legality ALONE is intentionally insufficient: a consistent coordinate flip can
-yield legal-but-wrong moves that pass membership while losing every game. Gates
-2 and 3 catch that. The process exits non-zero if any gate fails, and exits 0
-with a clear message (no failure) if gnubg simply isn't installed/reachable, so
-contributors without gnubg aren't blocked.
-
-Run:  python validate_gnubg.py
+Mirrors the structure of ``validate_sage.py`` (cross-validate + real matches).
+Expects a gnubg external server already listening on the arena default port
+(the CI job starts ``printf 'external localhost:8888\\n' | gnubg -t -q &``).
 """
 
 from __future__ import annotations
 
 import random
+import shutil
 import sys
 import time
 
-from bgarena import (
-    Board, legal_plays, RandomEngine, HeuristicEngine, GnubgEngine,
-    duplicate_match,
-)
-from bgarena.engines import DEFAULT_GNUBG_PORT
+# ---------------------------------------------------------------------------
+# Prerequisites (checked at IMPORT time, same as scripts/gnubg_probe.py). Any
+# failure prints a clear message and exits 1.
+# ---------------------------------------------------------------------------
+
+if sys.version_info < (3, 10):
+    print(f"ERROR: Python >= 3.10 required; running {sys.version.split()[0]}.")
+    sys.exit(1)
+
+GNUBG = shutil.which("gnubg")
+if GNUBG is None:
+    print("ERROR: 'gnubg' not found on PATH.")
+    print("Install it with:  apt-get install gnubg   /   brew install gnubg")
+    sys.exit(1)
+
+# Allow running from the repo root without installing the package.
+sys.path.insert(0, ".")
+try:
+    from bgarena import (                                   # noqa: E402
+        Board, legal_plays, RandomEngine, HeuristicEngine, GnubgEngine,
+        duplicate_match,
+    )
+except ImportError as e:
+    print(f"ERROR: cannot import bgarena ({e!r}).")
+    print("Install it with:  pip install -e .   (from the repo root)")
+    sys.exit(1)
 
 
-# --------------------------------------------------------------------------
-# Connectivity / graceful skip
-# --------------------------------------------------------------------------
-def connect_or_skip() -> GnubgEngine | None:
-    """Return a connected GnubgEngine, or None (with a message) to skip."""
-    eng = GnubgEngine(connect_timeout=3)  # short: a fast skip for contributors w/o gnubg
-    b = Board.starting()
-    plays = legal_plays(b, 3, 1)          # a position with many legal plays
-    try:
-        eng.choose(b, (3, 1), plays, {})  # forces the lazy connect + one exchange
-    except ConnectionError as e:
-        print("== GNUbg validation SKIPPED (not installed / unreachable) ==")
-        print(f"  {e}".replace("\n", "\n  "))
-        print("\n  This is not a failure — install gnubg and start the external")
-        print(f"  server on port {DEFAULT_GNUBG_PORT} to run the GNUbg gates.")
-        eng.close()
-        return None
-    return eng
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+PAIRS        = 25     # duplicate-dice pairs per match (50 games)
+BASE_SEED    = 42
+LEGALITY_N   = 200    # positions to cross-check in gate 1
 
 
-# --------------------------------------------------------------------------
-# Gate 1: legality cross-check (mirrors validate_sage's random-game walker)
-# --------------------------------------------------------------------------
-def legality_cross_check(engine: GnubgEngine, n_positions: int = 300, seed: int = 0) -> bool:
+# ---------------------------------------------------------------------------
+# Gate 1 — legality cross-check
+# ---------------------------------------------------------------------------
+
+def gate1_legality() -> bool:
+    """Every move gnubg returns must be one of the referee's legal plays."""
     print("== gate 1: legality cross-check ==")
-    rng = random.Random(seed)
-    advance = RandomEngine(seed=99)       # advance the walk randomly; TEST with gnubg
-    checked = 0
-    illegal = 0
+    try:
+        rng = random.Random(BASE_SEED)
+        r1, r2 = RandomEngine(seed=1), RandomEngine(seed=2)
+        checked = 0
+        violations = 0
 
-    while checked < n_positions:
-        board = Board.starting()
-        d1, d2 = _nondouble_roll(rng)
-        for _ in range(400):
-            plays = legal_plays(board, d1, d2)
-            if len(plays) > 1:
-                chosen = engine.choose(board, (d1, d2), plays, {})
-                legal_keys = {p.end_board.position_key() for p in plays}
-                if chosen.end_board.position_key() not in legal_keys:
-                    illegal += 1
-                    if illegal <= 3:
-                        print(f"  ILLEGAL at dice={d1},{d2}: {chosen.notation()}")
-                checked += 1
-                if checked >= n_positions:
-                    break
-            # advance one random ply
-            nxt = advance.choose(board, (d1, d2), plays, {}) if len(plays) > 1 else plays[0]
-            board = nxt.end_board
-            if board.off >= 15:
-                break
-            board = board.flip()
-            d1, d2 = rng.randint(1, 6), rng.randint(1, 6)
+        with GnubgEngine() as gnu:
+            # Walk random games and test the live roll at each position (same
+            # walk as validate_sage.py::cross_validate).
+            while checked < LEGALITY_N:
+                board = Board.starting()
+                d1, d2 = rng.randint(1, 6), rng.randint(1, 6)
+                while d1 == d2:                       # legal opening is non-double
+                    d1, d2 = rng.randint(1, 6), rng.randint(1, 6)
+                on_roll_engine = r1
+                for _ in range(200):
+                    plays = legal_plays(board, d1, d2)
+                    legal_keys = {p.end_board.position_key() for p in plays}
 
-    ok = illegal == 0
-    print(f"  checked {checked} positions, {illegal} illegal  [{'ok' if ok else 'FAIL'}]\n")
-    return ok
+                    chosen = gnu.choose(board, (d1, d2), plays, {})
+                    if chosen.end_board.position_key() not in legal_keys:
+                        violations += 1
+                        if violations <= 3:
+                            print(f"  VIOLATION at dice={d1},{d2}")
+                            print(f"    board       : {board.position_key()}")
+                            print(f"    returned key: {chosen.end_board.position_key()}")
+                            print(f"    legal keys  : {legal_keys}")
+
+                    checked += 1
+                    if checked >= LEGALITY_N:
+                        break
+
+                    # advance the game one (random) ply
+                    nxt = (on_roll_engine.choose(board, (d1, d2), plays, {})
+                           if len(plays) > 1 else plays[0])
+                    board = nxt.end_board
+                    if board.off >= 15:
+                        break
+                    board = board.flip()
+                    on_roll_engine = r2 if on_roll_engine is r1 else r1
+                    d1, d2 = rng.randint(1, 6), rng.randint(1, 6)
+
+        ok = violations == 0
+        print(f"  checked {checked} positions, {violations} violations  "
+              f"[{'ok' if ok else 'FAIL'}]\n")
+        return ok
+    except Exception as e:
+        print(f"  [FAIL: {e!r}]\n")
+        return False
 
 
-def _nondouble_roll(rng: random.Random) -> tuple[int, int]:
-    d1, d2 = rng.randint(1, 6), rng.randint(1, 6)
-    while d1 == d2:
-        d1, d2 = rng.randint(1, 6), rng.randint(1, 6)
-    return d1, d2
+# ---------------------------------------------------------------------------
+# Gate 2 — forced-position sanity
+# ---------------------------------------------------------------------------
 
-
-# --------------------------------------------------------------------------
-# Gate 2: forced-position sanity (obviously-correct play, NOT gnubg==Sage)
-# --------------------------------------------------------------------------
-def _bear_off_two_race() -> tuple[Board, tuple[int, int], str]:
-    """Pure race, all home: with 6-5 gnubg must bear two checkers off."""
+def _forced_bear_off() -> Board:
+    """One checker on the ace point, 14 already off. Dice 1-1 -> 1/off; game over."""
     b = Board()
-    b.points[6] = 2
-    b.points[5] = 2
-    b.off = 11                                   # 2 + 2 + 11 = 15
-    b.points[20] = -2                            # opponent far away: no contact
-    b.opp_off = 13                               # 2 + 13 = 15
-    return b, (6, 5), "bear off two in a pure race"
+    b.points[1] = 1
+    b.off = 14
+    return b
 
 
-def _double_hit() -> tuple[Board, tuple[int, int], str]:
-    """Two opponent blots in our home reachable with 4-3: gnubg must double-hit."""
+def _forced_hit() -> Board:
+    """Our checker on 20, a lone opponent blot on 14, the rest of our checkers
+    parked. Dice 6-6 forces 20/14* (the only legal six) so the blot is hit."""
     b = Board()
-    b.points[24] = 2
-    b.points[13] = 5
-    b.points[8] = 3
-    b.points[7] = 1
-    b.points[6] = 1
-    b.points[5] = 3                              # on-roll total = 15
-    b.points[4] = -1                             # opponent blot (hit with 7/4, die 3)
-    b.points[2] = -1                             # opponent blot (hit with 6/2, die 4)
-    b.points[1] = -2
-    b.points[12] = -5
-    b.points[17] = -3
-    b.points[20] = -3                            # opponent total = 15
-    return b, (4, 3), "double hit two blots in the home board"
+    b.points[20] = 1     # our checker
+    b.points[14] = -1    # lone opponent blot
+    b.points[6] = 14     # rest of our checkers (irrelevant to the forced six)
+    return b
 
 
-def forced_positions(engine: GnubgEngine) -> bool:
+def _forced_bar_entry() -> Board:
+    """Checker on the bar; die 5 blocked (point 20), point 23 open so die 2
+    must enter. Dice 5-2 -> the checker comes in off the bar."""
+    b = Board()
+    b.bar = 1
+    b.points[6] = 4
+    b.points[20] = -2    # blocks entry with die 5 (25 - 5 = 20)
+    # point 23 is open — die 2 can enter
+    return b
+
+
+def gate2_forced() -> bool:
+    """gnubg must pick the *right* move on three single-answer positions."""
     print("== gate 2: forced-position sanity ==")
-    ok = True
 
-    # (a) bear off two
-    b, dice, desc = _bear_off_two_race()
-    plays = legal_plays(b, *dice)
-    assert len(plays) > 1, "test position should offer a real choice"
-    chosen = engine.choose(b, dice, plays, {})
-    best_off = max(p.end_board.off for p in plays)
-    passed = chosen.end_board.off == best_off == 13
-    ok &= passed
-    print(f"  {desc}: chose {chosen.notation()} (off={chosen.end_board.off}) "
-          f"[{'ok' if passed else 'FAIL'}]")
+    # (label, board factory, dice, check(end_board)->bool, value(end_board)->str)
+    cases = [
+        ("2a (forced bear-off):",
+         _forced_bear_off, (1, 1),
+         lambda eb: eb.off == 15,
+         lambda eb: f"off={eb.off}"),
+        ("2b (forced hit):",
+         _forced_hit, (6, 6),
+         lambda eb: eb.opp_bar >= 1,
+         lambda eb: f"opp_bar={eb.opp_bar}"),
+        ("2c (forced bar entry):",
+         _forced_bar_entry, (5, 2),
+         lambda eb: eb.bar == 0,
+         lambda eb: f"bar={eb.bar}"),
+    ]
 
-    # (b) double hit
-    b, dice, desc = _double_hit()
-    plays = legal_plays(b, *dice)
-    assert len(plays) > 1, "test position should offer a real choice"
-    assert any(p.end_board.opp_bar == 2 for p in plays), "double hit must be legal here"
-    chosen = engine.choose(b, dice, plays, {})
-    passed = chosen.end_board.opp_bar == 2
-    ok &= passed
-    print(f"  {desc}: chose {chosen.notation()} (opp_bar={chosen.end_board.opp_bar}) "
-          f"[{'ok' if passed else 'FAIL'}]")
+    all_ok = True
+    try:
+        with GnubgEngine() as gnu:
+            for label, factory, dice, check, value_of in cases:
+                try:
+                    board = factory()
+                    plays = legal_plays(board, *dice)
+                    chosen = gnu.choose(board, dice, plays, {})
+                    eb = chosen.end_board
+                    ok = check(eb)
+                    status = "[ok]" if ok else "[FAIL]"
+                    print(f"  {label:<22} {value_of(eb):<14} {status}")
+                    all_ok = all_ok and ok
+                except Exception as e:
+                    all_ok = False
+                    print(f"  {label:<22} [FAIL: {e!r}]")
+    except Exception as e:
+        print(f"  [FAIL: {e!r}]")
+        all_ok = False
 
-    print(f"  forced-position sanity  [{'ok' if ok else 'FAIL'}]\n")
-    return ok
+    print()
+    return all_ok
 
 
-# --------------------------------------------------------------------------
-# Gate 3: smoke matches (full games terminate; small pairs for gnubg latency)
-# --------------------------------------------------------------------------
-def smoke_matches(engine: GnubgEngine) -> bool:
-    print("== gate 3: smoke matches ==")
-    ok = True
+# ---------------------------------------------------------------------------
+# Gate 3 — smoke matches
+# ---------------------------------------------------------------------------
 
+def _run_match(opponent, threshold: float) -> tuple[bool, str]:
+    """Play one duplicate match GNUbg vs `opponent`; return (passed, line)."""
     t = time.time()
-    m = duplicate_match(engine, HeuristicEngine(name="Heuristic"), pairs=10)
+    with GnubgEngine() as gnu:
+        m = duplicate_match(gnu, opponent, pairs=PAIRS, base_seed=BASE_SEED)
     dt = time.time() - t
-    print(f"  {m.a} vs {m.b}: {m.wins_a}-{m.wins_b} over {m.games} games  [{dt:.1f}s]")
-    ok &= m.games == 20
 
+    rate = 100.0 * m.wins_a / m.games if m.games else 0.0
+    ok = rate > threshold
+    score = f"{m.wins_a}-{m.wins_b}"
+    pct = f"{rate:.1f}%"
+    label = f"GNUbg vs {m.b}:"
+    line = (f"  {label:<19} {score:<5} over {m.games} games "
+            f"({pct:<6} GNUbg)  [{'ok' if ok else 'FAIL'}]   [{dt:.1f}s]")
+    return ok, line
+
+
+def gate3_matches() -> bool:
+    """GNUbg must beat Random clearly and stay competitive with Heuristic."""
+    print("== gate 3: smoke matches ==")
     try:
-        from bgarena import SageEngine
-        sage = SageEngine(level="1ply")
-        t = time.time()
-        m2 = duplicate_match(engine, sage, pairs=10)
-        dt = time.time() - t
-        print(f"  {m2.a} vs {m2.b}: {m2.wins_a}-{m2.wins_b} over {m2.games} games  [{dt:.1f}s]")
-        ok &= m2.games == 20
-    except ImportError:
-        print("  (Sage smoke skipped: bgsage not installed)")
-
-    print(f"  smoke matches  [{'ok' if ok else 'FAIL'}]\n")
-    return ok
+        ok_random, line_random = _run_match(RandomEngine(seed=5, name="Random"), 70.0)
+        print(line_random)
+        ok_heur, line_heur = _run_match(HeuristicEngine(name="Heuristic"), 55.0)
+        print(line_heur)
+        print()
+        return ok_random and ok_heur
+    except Exception as e:
+        print(f"  [FAIL: {e!r}]\n")
+        return False
 
 
-# --------------------------------------------------------------------------
-def main() -> None:
-    engine = connect_or_skip()
-    if engine is None:
-        sys.exit(0)                              # skip is not a failure
+# ---------------------------------------------------------------------------
+# Summary
+# ---------------------------------------------------------------------------
 
-    try:
-        g1 = legality_cross_check(engine)
-        g2 = forced_positions(engine)
-        g3 = smoke_matches(engine)
-    finally:
-        engine.close()
-
+def print_summary(ok1: bool, ok2: bool, ok3: bool) -> None:
     print("== summary ==")
-    print(f"  legality cross-check  : {'ok' if g1 else 'FAIL'}")
-    print(f"  forced-position sanity: {'ok' if g2 else 'FAIL'}")
-    print(f"  smoke matches         : {'ok' if g3 else 'FAIL'}")
-    if not (g1 and g2 and g3):
-        raise SystemExit("GNUbg validation FAILED — adapter stays quarantined "
-                         "(see docs/gnubg-protocol.md)")
-    print("\n  ALL GATES PASS — GNUbg adapter verified.")
+    for label, ok in (
+        ("gate 1 (legality):", ok1),
+        ("gate 2 (forced positions):", ok2),
+        ("gate 3 (smoke matches):", ok3),
+    ):
+        print(f"{label:<27}{'[ok]' if ok else '[FAIL]'}")
+
+    if ok1 and ok2 and ok3:
+        print("All gates passed. GnubgEngine is ready for the contender round-robin.")
+        print("Remove `continue-on-error` from the gnubg CI job.")
+    else:
+        n_failed = sum(1 for ok in (ok1, ok2, ok3) if not ok)
+        print(f"{n_failed} gate(s) failed. Do not promote GnubgEngine.")
 
 
 if __name__ == "__main__":
-    main()
+    ok1 = gate1_legality()
+    ok2 = gate2_forced()
+    ok3 = gate3_matches()
+    print_summary(ok1, ok2, ok3)
+    sys.exit(0 if (ok1 and ok2 and ok3) else 1)

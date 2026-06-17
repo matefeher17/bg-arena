@@ -132,17 +132,17 @@ class Board:
 
     def to_fibs_board(self, dice: tuple[int, int],
                       player: str = "gnubg", opponent: str = "arena") -> str:
-        """FIBS-style ``board:`` line for gnubg's external interface (PRIMARY path).
+        """FIBS-style ``board:`` line for gnubg's external interface.
 
-        ⚠ QUARANTINED / UNVERIFIED ENCODER. The exact FIBS field order and the
-        direction/colour/home/bar quartet are notoriously fiddly and vary in how
-        builds tolerate them. This implementation is a documented *hypothesis*;
-        it is NOT trusted until the Linux probe (``scripts/gnubg_probe.py``) plus
-        the forced-position and smoke-match gates in ``validate_gnubg.py`` pass.
-        See ``docs/gnubg-protocol.md``. Reconciliation-by-resulting-position in
-        ``GnubgEngine`` means a wrong guess here fails loudly rather than cheats.
+        Wire format confirmed on gnubg 1.07.001 / ubuntu-latest (commit ``ddb6fcf``).
+        Two fields required non-obvious values vs the FIBS spec (see
+        ``docs/gnubg-protocol.md``, "What fixed it"):
 
-        Hypothesis (chosen so gnubg's point numbering matches ours 1:1, which the
+          * ``turn`` / ``colour`` must be ``1`` (positive = on-roll player moves).
+          * both ``may-double`` flags must be ``1`` (centred cube bypasses gnubg's
+            cube-decision heuristic).
+
+        Encoding (chosen so gnubg's point numbering matches ours 1:1, which the
         board.py header was already designed for):
 
         * The 26-int board array is sent in ON-ROLL perspective:
@@ -199,11 +199,8 @@ class Board:
     def to_gnubg_position_id(self) -> str:
         """GNU Backgammon Position ID — 14-char base64 of the 80-bit position key.
 
-        ⚠ QUARANTINED / UNVERIFIED ENCODER (CLI ``hint`` fallback + the probe's
-        round-trip verification). Per the spec, the bit layout must NOT be trusted
-        without a round-trip check (feed the ID to gnubg, read the position back,
-        assert equality) — ``scripts/gnubg_probe.py`` does exactly that. Format
-        reference cited in ``docs/gnubg-protocol.md``.
+        Confirmed correct: reproduces the canonical starting-position ID
+        ``4HPwATDgc/ABMA`` exactly (gnubg 1.07.001).
 
         Documented algorithm (gnubg ``positionid.c`` / PositionKey): two players'
         boards are written as a bitstream, player on roll first. For each player,
