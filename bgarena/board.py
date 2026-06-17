@@ -176,13 +176,13 @@ class Board:
             1,                       # match length (cubeless 1-pointer)
             0, 0,                    # scores (player, opponent)
             *arr,                    # 26 board ints, indices 0..25
-            -1,                      # turn: on-roll player's colour (-1 == X)
+            1,                       # turn: on-roll player to move (1 == O, cube not offered)
             d1, d2,                  # on-roll player's dice
             0, 0,                    # opponent's dice (not their turn)
             1,                       # cube value
             0, 0,                    # may double (player, opponent) — SPEC-2
             0,                       # was doubled
-            -1,                      # colour of player on roll
+            1,                       # colour of player on roll (must match turn)
             -1,                      # direction of play (high -> low)
             0,                       # home board index (off end)
             25,                      # bar index (entry end)
