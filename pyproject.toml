@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bgarena"
+version = "0.1.0"
+description = "A backgammon engine arena: a referee and tournament harness for pitting engines against each other."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "AGPL-3.0-only" }
+authors = [{ name = "bgarena contributors" }]
+keywords = ["backgammon", "engine", "arena", "tournament", "neural-network"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: GNU Affero General Public License v3",
+    "Topic :: Games/Entertainment :: Board Games",
+    "Operating System :: OS Independent",
+]
+dependencies = []  # core arena is standard-library only
+
+[project.optional-dependencies]
+# Engine adapters that need extra packages.
+sage = ["bgsage>=0.8"]
+
+[tool.setuptools.packages.find]
+include = ["bgarena*"]

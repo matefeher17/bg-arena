@@ -1,0 +1,13 @@
+# The core arena (bgarena package: referee, rules engine, tournament,
+# Random/Heuristic engines) has NO third-party dependencies — it runs on the
+# Python standard library alone.
+#
+# The lines below are OPTIONAL, needed only for specific engine adapters:
+
+# Sage engine (SageEngine). Pulls in numpy automatically.
+# 64-bit CPython 3.10-3.14 has prebuilt wheels (Windows/macOS/Linux).
+bgsage>=0.8
+
+# Wildbg engine (WildbgEngine) needs NO Python package — it talks to a wildbg
+# HTTP server over stdlib urllib. Run the server separately, e.g.:
+#   docker run -p 8082:8082 wildbg
