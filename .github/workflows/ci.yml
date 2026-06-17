@@ -84,3 +84,9 @@ jobs:
           printf 'external localhost:8888\n' | gnubg -t -q &
           sleep 3
           python validate_gnubg.py
+
+      - name: Run contender round-robin (Sage vs GNUbg vs Heuristic)
+        run: |
+          printf 'external localhost:8888\n' | gnubg -t -q &
+          sleep 3
+          python run_contenders.py
