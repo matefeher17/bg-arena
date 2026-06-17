@@ -54,7 +54,7 @@ jobs:
     # adapter is still quarantined (see docs/gnubg-protocol.md); flip it off
     # once all three gates in validate_gnubg.py pass here.
     runs-on: ubuntu-latest
-    continue-on-error: true
+  
     steps:
       - uses: actions/checkout@v4
 
