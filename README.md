@@ -3,7 +3,7 @@
 A **backgammon engine arena**: a referee and tournament harness that pits backgammon engines against each other under fair, reproducible conditions.
 
 <!-- Replace OWNER/REPO after you push, then this badge goes live: -->
-[![CI](https://github.com/OWNER/REPO/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/REPO/actions/workflows/ci.yml)
+[![CI](https://github.com/matefeher17/bg-arena/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/REPO/actions/workflows/ci.yml)
 
 ## The idea
 
