@@ -27,8 +27,39 @@ The move generator is **cross-validated against Sage's independent C++ generator
 | Random, Heuristic | — | Built in, zero dependencies (baselines) |
 | **Sage** (`bgsage`) | AGPL-3.0 | **Working** — neural net, configurable ply |
 | Wildbg | MIT/Apache | Adapter written; confirm JSON schema vs a live server |
-| GNUbg | GPL-3.0 | Planned (CLI `hint` or external socket) |
+| GNUbg | GPL-3.0 | Adapter written (external socket); **quarantined** until the Linux CI gates pass — see below |
 | XG | proprietary | Champion + PR judge; later, via a Windows worker |
+
+### Running GNUbg
+
+The GNUbg adapter talks to [GNU Backgammon](https://www.gnu.org/software/gnubg/)
+over its **external interface** (a TCP socket), so a long-running arena reuses one
+server process.
+
+```bash
+# install (gnubg >= 1.06, validated version recorded in docs/gnubg-protocol.md)
+sudo apt-get install -y gnubg      # Linux
+brew install gnubg                 # macOS
+
+# start the external server on the arena's default port (8888):
+printf 'external localhost:8888\n' | gnubg -t -q
+```
+
+```python
+from bgarena import GnubgEngine, HeuristicEngine, duplicate_match
+
+with GnubgEngine() as gnu:          # connects lazily; close()/context-manager tears down
+    m = duplicate_match(gnu, HeuristicEngine(), pairs=10)
+    print(f"{m.a} {m.wins_a} - {m.wins_b} {m.b}")
+```
+
+> **Quarantine status.** The arena was developed on Windows, which can't run
+> gnubg, so the wire format is coded as a *hypothesis* (the Position ID encoder is
+> already confirmed against gnubg's canonical starting ID; the FIBS `board:` line
+> is the unverified part). The adapter is trusted only once all three gates in
+> `validate_gnubg.py` — legality **and** forced-position sanity **and** smoke
+> matches — pass on Linux CI. Capture real ground truth first with
+> `python scripts/gnubg_probe.py` and see [docs/gnubg-protocol.md](docs/gnubg-protocol.md).
 
 ## Quickstart
 
@@ -70,6 +101,9 @@ bgarena/
   tournament.py   duplicate-dice match + round-robin standings
 tests_demo.py     correctness checks + demo tournament (no deps)
 validate_sage.py  cross-validation against bgsage + sample matches
+validate_gnubg.py GNUbg adapter gates: legality + forced-position + smoke matches
+scripts/          gnubg_probe.py (protocol ground-truth capture; excluded from CI core)
+docs/             gnubg-protocol.md (the captured/hypothesised gnubg wire format)
 ```
 
 ## Adding an engine

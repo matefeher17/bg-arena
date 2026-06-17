@@ -27,3 +27,41 @@ jobs:
           python -m pip install --upgrade pip
           pip install bgsage
           python validate_sage.py
+
+  gnubg:
+    # Separate job: gnubg is an external program with its own install + a
+    # headless launch that can be finicky in CI, so it must not break the
+    # stdlib/Sage matrix. continue-on-error keeps the build green while the
+    # adapter is still quarantined (see docs/gnubg-protocol.md); flip it off
+    # once all three gates in validate_gnubg.py pass here.
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install gnubg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gnubg
+          gnubg --version || true
+
+      - name: Install Sage (for the smoke-match gate)
+        run: |
+          python -m pip install --upgrade pip
+          pip install bgsage
+
+      - name: Capture protocol ground truth (probe)
+        # Self-launches and tears down its own external server. Never fails the
+        # job — it exists to record real request/response in the CI logs.
+        run: python scripts/gnubg_probe.py || true
+
+      - name: Start external server and run the GNUbg gates
+        run: |
+          printf 'external localhost:8888\n' | gnubg -t -q &
+          sleep 3
+          python validate_gnubg.py

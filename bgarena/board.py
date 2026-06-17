@@ -130,6 +130,115 @@ class Board:
             params["p0"] = -self.opp_bar
         return params
 
+    def to_fibs_board(self, dice: tuple[int, int],
+                      player: str = "gnubg", opponent: str = "arena") -> str:
+        """FIBS-style ``board:`` line for gnubg's external interface (PRIMARY path).
+
+        ⚠ QUARANTINED / UNVERIFIED ENCODER. The exact FIBS field order and the
+        direction/colour/home/bar quartet are notoriously fiddly and vary in how
+        builds tolerate them. This implementation is a documented *hypothesis*;
+        it is NOT trusted until the Linux probe (``scripts/gnubg_probe.py``) plus
+        the forced-position and smoke-match gates in ``validate_gnubg.py`` pass.
+        See ``docs/gnubg-protocol.md``. Reconciliation-by-resulting-position in
+        ``GnubgEngine`` means a wrong guess here fails loudly rather than cheats.
+
+        Hypothesis (chosen so gnubg's point numbering matches ours 1:1, which the
+        board.py header was already designed for):
+
+        * The 26-int board array is sent in ON-ROLL perspective:
+            arr[1..24] = self.points[1..24]  (positive = on roll, negative = opp)
+            arr[25]    = +self.bar           (on-roll bar, high end)
+            arr[0]     = -self.opp_bar       (opponent bar, low end)
+          So FIBS point i == our point i, and the on-roll player moves 24 -> 1,
+          enters from the bar on 25-die, and bears off past point 1.
+        * Fields after the board: turn, our two dice, opponent's two dice (0,0),
+          cube value (1), may-double flags (0), was-doubled (0), then the
+          colour/direction/home/bar quartet describing a player who moves from
+          the high end (24) to the low end (1): colour=-1, direction=-1,
+          home=0, bar=25. Trailing FIBS fields (on-home / on-bar / pip / can-move
+          / forced / did-crawford / redoubles) are filled with neutral values;
+          gnubg recomputes what it needs from the board.
+
+        ``off``/``opp_off`` are implicit (15 minus checkers on the board+bar) and
+        are not part of the FIBS board line.
+        """
+        d1, d2 = dice
+        arr = [0] * 26
+        for p in range(1, NUM_POINTS + 1):
+            arr[p] = self.points[p]
+        arr[25] = self.bar
+        arr[0] = -self.opp_bar
+
+        fields = [
+            "board",
+            player,
+            opponent,
+            1,                       # match length (cubeless 1-pointer)
+            0, 0,                    # scores (player, opponent)
+            *arr,                    # 26 board ints, indices 0..25
+            -1,                      # turn: on-roll player's colour (-1 == X)
+            d1, d2,                  # on-roll player's dice
+            0, 0,                    # opponent's dice (not their turn)
+            1,                       # cube value
+            0, 0,                    # may double (player, opponent) — SPEC-2
+            0,                       # was doubled
+            -1,                      # colour of player on roll
+            -1,                      # direction of play (high -> low)
+            0,                       # home board index (off end)
+            25,                      # bar index (entry end)
+            0, 0,                    # checkers on home (player, opponent)
+            0, 0,                    # checkers on bar (player, opponent)
+            d1, d2,                  # the roll (echo)
+            0,                       # redoubles
+        ]
+        return ":".join(str(f) for f in fields)
+
+    def to_gnubg_position_id(self) -> str:
+        """GNU Backgammon Position ID — 14-char base64 of the 80-bit position key.
+
+        ⚠ QUARANTINED / UNVERIFIED ENCODER (CLI ``hint`` fallback + the probe's
+        round-trip verification). Per the spec, the bit layout must NOT be trusted
+        without a round-trip check (feed the ID to gnubg, read the position back,
+        assert equality) — ``scripts/gnubg_probe.py`` does exactly that. Format
+        reference cited in ``docs/gnubg-protocol.md``.
+
+        Documented algorithm (gnubg ``positionid.c`` / PositionKey): two players'
+        boards are written as a bitstream, player on roll first. For each player,
+        walk 25 slots (their 24 points from the ace point outward, then the bar),
+        writing ``count`` 1-bits followed by a single 0-bit separator. Bits are
+        packed LSB-first into 10 bytes (80 bits); base64 of those 10 bytes, with
+        padding stripped, yields the 14-char ID.
+
+        Point-numbering hypothesis:
+          * on-roll player's slot j (0..23) = our point (j+1); slot 24 = on-roll bar.
+          * opponent's slot j (0..23) = our point (24-j); slot 24 = opponent bar.
+        """
+        on_roll = [0] * 25
+        opp = [0] * 25
+        for p in range(1, NUM_POINTS + 1):
+            v = self.points[p]
+            if v > 0:
+                on_roll[p - 1] = v
+            elif v < 0:
+                opp[NUM_POINTS - p] = -v
+        on_roll[24] = self.bar
+        opp[24] = self.opp_bar
+
+        bits: list[int] = []
+        for slots in (on_roll, opp):       # player on roll first
+            for count in slots:
+                bits.extend([1] * count)
+                bits.append(0)             # separator
+        # Pad to 80 bits and pack LSB-first into 10 bytes.
+        bits += [0] * (80 - len(bits))
+        key = bytearray(10)
+        for i, bit in enumerate(bits[:80]):
+            if bit:
+                key[i >> 3] |= 1 << (i & 7)
+
+        import base64
+        return base64.b64encode(bytes(key)).decode("ascii").rstrip("=")
+
     # ---- display --------------------------------------------------------
     def __str__(self) -> str:
         def cell(p: int) -> str:
